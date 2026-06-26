@@ -7,22 +7,24 @@ import random
 from collections import deque
 import matplotlib.pyplot as plt
 
-# --- Hyperparameters ---
+# --- Hyperparameters (Restored to your working baseline) ---
 ENV_NAME = "CartPole-v1"
-GAMMA = 0.99                
-LR = 1e-3                   
+GAMMA = 0.99                # Discount factor
+LR = 1e-3                   # Learning rate
 BATCH_SIZE = 64             
-BUFFER_CAPACITY = 20000     
-MIN_REPLAY_SIZE = 1000      
+BUFFER_CAPACITY = 10000     
+MIN_REPLAY_SIZE = 1000      # Steps collected before optimization begins
+
 EPSILON_START = 1.0         
-EPSILON_END = 0.01          
-EPSILON_DECAY = 0.99
+EPSILON_END = 0.05          
+EPSILON_DECAY = 0.995       # RESTORED: Stable exponential decay from your original run
+
 TARGET_UPDATE_FREQ = 10     
-MAX_EPISODES = 300
+MAX_EPISODES = 300          
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# --- 1. The Deep Q-Network Architecture ---
+# --- Network Architecture ---
 class DQN(nn.Module):
     def __init__(self, state_dim, action_dim):
         super(DQN, self).__init__()
@@ -37,7 +39,7 @@ class DQN(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-# --- 2. The Experience Replay Buffer ---
+# --- Replay Buffer ---
 class ReplayBuffer:
     def __init__(self, capacity):
         self.buffer = deque(maxlen=capacity)
@@ -52,13 +54,12 @@ class ReplayBuffer:
                 torch.FloatTensor(reward).to(DEVICE),
                 torch.FloatTensor(np.array(next_state)).to(DEVICE),
                 torch.FloatTensor(done).to(DEVICE))
-                
+                 
     def __len__(self):
         return len(self.buffer)
 
-# --- 3. The Core Training Loop Engine ---
 def train_agent():
-    print(f"Booting up Double DQN Controller on {DEVICE}...")
+    print(f"Booting up Double DQN Engine on {DEVICE}...")
     
     env = gym.make(ENV_NAME)
     state_dim = env.observation_space.shape[0]
@@ -73,14 +74,14 @@ def train_agent():
     
     epsilon = EPSILON_START
     episode_rewards = []
+    best_avg_reward = 0.0  # Tracks historical peak performance
     
     for episode in range(1, MAX_EPISODES + 1):
         state, _ = env.reset()
-        total_reward = 0
+        total_reward = 0  
         done = False
         
         while not done:
-            # Epsilon-Greedy Action Selection
             if random.random() < epsilon:
                 action = env.action_space.sample()
             else:
@@ -91,22 +92,21 @@ def train_agent():
             next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             
+            # RESTORED: Clean environment step reward (+1 per frame baseline)
             memory.push(state, action, reward, next_state, done)
-            state = next_state
-            total_reward += reward
             
-            # Optimization Phase
+            state = next_state
+            total_reward += reward 
+            
             if len(memory) >= MIN_REPLAY_SIZE:
                 states, actions, rewards, next_states, dones = memory.sample(BATCH_SIZE)
                 
                 current_q_values = policy_net(states).gather(1, actions)
                 
-                # --- DOUBLE DQN: policy net chooses action, target net evaluates it ---
                 with torch.no_grad():
                     next_state_actions = policy_net(next_states).argmax(dim=1, keepdim=True)
                     next_q_values = target_net(next_states).gather(1, next_state_actions).squeeze(1)
                     expected_q_values = rewards + (GAMMA * next_q_values * (1 - dones))
-                # ---------------------------------------------------------------------
                     
                 loss = nn.MSELoss()(current_q_values, expected_q_values.unsqueeze(1))
                 
@@ -114,6 +114,7 @@ def train_agent():
                 loss.backward()
                 optimizer.step()
                 
+        # Apply exponential decay
         epsilon = max(EPSILON_END, epsilon * EPSILON_DECAY)
         episode_rewards.append(total_reward)
         
@@ -121,28 +122,33 @@ def train_agent():
             target_net.load_state_dict(policy_net.state_dict())
             
         avg_reward = np.mean(episode_rewards[-10:]) if len(episode_rewards) >= 10 else np.mean(episode_rewards)
-        print(f"Episode [{episode}/{MAX_EPISODES}] | Score: {total_reward:.1f} | 10-Ep Avg: {avg_reward:.1f} | Epsilon: {epsilon:.3f}")
+        print(f"Episode [{episode}/{MAX_EPISODES}] | Score: {total_reward:.1f} | 10-Ep Rolling Avg: {avg_reward:.1f} | Epsilon: {epsilon:.3f}")
+        
+        # --- FIXED EXPORTER: Always saves if it outperforms its own history ---
+        if avg_reward > best_avg_reward and len(episode_rewards) >= 10:
+            best_avg_reward = avg_reward
+            torch.save(policy_net.state_dict(), "ddqn_cartpole_weights.pt")
+            print(f"--> Exported superior brain checkpoint (New Record Rolling Avg: {best_avg_reward:.1f})")
         
         if avg_reward >= 475.0:
-            print(f"\n[VICTORY] Environment solved in {episode} episodes!")
+            print(f"\n[VICTORY] Target score cleared! Retaining peak weight files.")
             break
             
     env.close()
     
+    # Generate Plot
     plt.figure(figsize=(10, 5))
     plt.plot(episode_rewards, label="Episode Reward", color="purple", alpha=0.4)
-    
     rolling_windows = [np.mean(episode_rewards[max(0, i-9):i+1]) for i in range(len(episode_rewards))]
     plt.plot(rolling_windows, label="10-Episode Rolling Average", color="darkorange", linewidth=2)
-    
     plt.axhline(y=475, color="green", linestyle="--", label="Solved Threshold (475)")
-    plt.title("Double DQN Optimization Profile (CartPole-v1)")
+    plt.title("Double DQN (DDQN) Restored Clean Profile")
     plt.xlabel("Training Episodes")
     plt.ylabel("Cumulative Reward")
     plt.legend()
     plt.grid(True)
     plt.savefig("dqn_training_profile.png")
-    print("\nTraining complete. Saved to 'dqn_training_profile.png'.")
+    print("\nRun complete. Diagnostic plot saved to 'dqn_training_profile.png'.")
 
 if __name__ == "__main__":
     train_agent()
